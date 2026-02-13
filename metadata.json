@@ -1,0 +1,5 @@
+{
+  "name": "NexusAI Platform",
+  "description": "A high-end, cyberpunk-styled multi-modal AI platform supporting Chat, Image, and Video generation with user-provided API configurations.",
+  "requestFramePermissions": []
+}
