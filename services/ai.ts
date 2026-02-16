@@ -1,18 +1,45 @@
 import { Settings, ChatMessage } from '../types';
 import { MODELS } from '../constants';
 
+// Helper to construct full URL
+const constructUrl = (globalBaseUrl: string, endpointPath: string, customBaseUrl?: string): string => {
+  const cleanPath = endpointPath.trim();
+  
+  // 1. If the endpoint path is already a full URL, use it directly
+  if (cleanPath.startsWith('http://') || cleanPath.startsWith('https://')) {
+    return cleanPath;
+  }
+
+  // 2. Determine which Base URL to use (Custom overrides Global)
+  let baseUrlToUse = globalBaseUrl;
+  if (customBaseUrl && customBaseUrl.trim().length > 0) {
+    baseUrlToUse = customBaseUrl.trim();
+  }
+
+  const cleanBase = baseUrlToUse.replace(/\/+$/, '');
+  const cleanEndpoint = cleanPath.replace(/^\/+/, '');
+  return `${cleanBase}/${cleanEndpoint}`;
+};
+
 export const streamChatCompletion = async (
   messages: ChatMessage[],
   settings: Settings,
   model: string,
+  endpointPath: string,
+  customBaseUrl: string,
+  customApiKey: string | undefined,
   onChunk: (chunk: string) => void
 ): Promise<void> => {
+  const url = constructUrl(settings.baseUrl, endpointPath, customBaseUrl);
+  // Use custom API key if provided, otherwise fallback to global settings
+  const apiKey = customApiKey?.trim() || settings.apiKey;
+  
   try {
-    const response = await fetch(`${settings.baseUrl}/v1/chat/completions`, {
+    const response = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${settings.apiKey}`,
+        'Authorization': `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
         model: model || MODELS.CHAT_DEFAULT,
@@ -26,7 +53,7 @@ export const streamChatCompletion = async (
       throw new Error(errorData.error?.message || `API Error: ${response.statusText}`);
     }
 
-    if (!response.body) throw new Error("在此浏览器中不支持 ReadableStream。");
+    if (!response.body) throw new Error("Incompatible browser: ReadableStream not supported.");
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder("utf-8");
@@ -49,7 +76,7 @@ export const streamChatCompletion = async (
               onChunk(content);
             }
           } catch (e) {
-            console.warn("Error parsing stream chunk", e);
+            // Ignore parse errors for partial chunks
           }
         }
       }
@@ -64,55 +91,99 @@ export const generateImage = async (
   prompt: string,
   settings: Settings,
   model: string,
-  size: string
+  size: string,
+  endpointPath: string,
+  customBaseUrl: string,
+  customApiKey: string | undefined,
+  imageBase64?: string | null
 ): Promise<string> => {
+  const url = constructUrl(settings.baseUrl, endpointPath, customBaseUrl);
+  const apiKey = customApiKey?.trim() || settings.apiKey;
   const selectedModel = model || MODELS.IMAGE_DEFAULT;
-  // Use provided size or default to 1024x1024 if somehow missing
   const selectedSize = size || "1024x1024";
-  
-  // Logic to switch endpoints based on model type
-  // Gemini image models (Nano Banana) use the Chat endpoint
-  // Standard models (gpt-image-1, gpt-image-1.5, dall-e-3) use the Image endpoint
-  const isGeminiChatModel = selectedModel.includes('gemini');
 
-  if (isGeminiChatModel) {
+  // LOGIC: If endpoint contains "chat/completions", treat as Chat-to-Image (Gemini style / Vision)
+  const isChatEndpoint = endpointPath.includes('chat/completions');
+
+  try {
+    let payload: any = {};
+    
+    if (isChatEndpoint) {
+      // Construct Chat Payload (Supports Vision if image provided)
+      let messagesContent: any[] = [{ type: 'text', text: prompt }];
+      
+      if (imageBase64) {
+        messagesContent.push({
+          type: 'image_url',
+          image_url: { url: imageBase64 }
+        });
+      }
+
+      payload = {
+        model: selectedModel,
+        messages: [{ role: 'user', content: messagesContent }],
+        stream: false
+      };
+    } else {
+      // Construct Standard Image Payload
+      payload = {
+        model: selectedModel,
+        prompt: prompt,
+        n: 1,
+        size: selectedSize
+      };
+
+      // If an image is provided to a standard endpoint, inject it.
+      // Many proxy APIs (like some SD wrappers) accept 'image' or 'init_image'.
+      if (imageBase64) {
+        payload.image = imageBase64; // Common field for img2img
+        payload.image_url = imageBase64; // Alternative common field
+      }
+    }
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      let errorMsg = `API Error: ${response.statusText}`;
+      try {
+        const json = JSON.parse(text);
+        errorMsg = json.error?.message || errorMsg;
+      } catch {
+        errorMsg += ` - ${text.slice(0, 100)}`;
+      }
+      throw new Error(errorMsg);
+    }
+
+    // Safe JSON Parsing
+    const text = await response.text();
+    let data;
     try {
-      const response = await fetch(`${settings.baseUrl}/v1/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${settings.apiKey}`,
-        },
-        body: JSON.stringify({
-          model: selectedModel,
-          messages: [{ role: 'user', content: prompt }],
-          stream: false // We need the full response to extract the URL
-        }),
-      });
+        data = JSON.parse(text);
+    } catch (e) {
+        throw new Error(`Invalid JSON response: ${text.slice(0, 100)}...`);
+    }
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error?.message || `API Error: ${response.statusText}`);
-      }
+    if (isChatEndpoint) {
+      // Extract from Chat Response (Markdown or URL in content)
+      const content = data.choices?.[0]?.message?.content || "";
+      console.log("Raw Chat-Image Response:", content);
 
-      const data = await response.json();
-      const content = data.choices[0]?.message?.content || "";
-      
-      console.log("Raw Model Response (Debug):", content);
-
-      // Extraction Logic:
-      // 1. Try Markdown format: ![alt](url) OR ![alt](data:image/...)
+      // 1. Markdown
       const markdownMatch = content.match(/!\[.*?\]\(((?:https?:\/\/|data:image\/)[^\)]+)\)/);
-      
-      if (markdownMatch && markdownMatch[1]) {
-        return markdownMatch[1];
-      }
+      if (markdownMatch && markdownMatch[1]) return markdownMatch[1];
 
-      // 2. Try raw URL pattern if markdown is missing
+      // 2. Raw URL
       const urlMatch = content.match(/(https?:\/\/[^\s]+)/);
       if (urlMatch && urlMatch[1]) {
         let cleanUrl = urlMatch[1];
-        // Clean trailing punctuation
         const trailingChars = [')', ']', '.', ',', '"', "'"];
         while (trailingChars.includes(cleanUrl.slice(-1))) {
             cleanUrl = cleanUrl.slice(0, -1);
@@ -120,124 +191,102 @@ export const generateImage = async (
         return cleanUrl;
       }
       
-      // 3. If content itself is just a URL
-      if (content.trim().startsWith('http')) {
-        return content.trim();
-      }
+      if (content.trim().startsWith('http')) return content.trim();
 
       const debugContent = content.length > 500 ? content.substring(0, 500) + "..." : content;
-      throw new Error(`无法提取图片 URL。模型响应内容: ${debugContent}`);
+      throw new Error(`Failed to extract URL from chat response: ${debugContent}`);
 
-    } catch (error) {
-      console.error("Gemini Image Generation Error:", error);
-      throw error;
-    }
-  } else {
-    // Standard OpenAI / DALL-E endpoint
-    // This handles 'gpt-image-1', 'gpt-image-1.5', 'dall-e-3', etc.
-    try {
-      const response = await fetch(`${settings.baseUrl}/v1/images/generations`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${settings.apiKey}`,
-        },
-        body: JSON.stringify({
-          model: selectedModel,
-          prompt: prompt,
-          n: 1,
-          size: selectedSize, // Ensure size is passed for standard models
-        }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error?.message || `API Error: ${response.statusText}`);
-      }
-
-      const data = await response.json();
-      
-      // STRICT VALIDATION & EXTRACTION
-      // Check if data array exists
+    } else {
+      // Extract from Standard Image Response
       if (!data || !data.data || !Array.isArray(data.data) || data.data.length === 0) {
-        throw new Error(`Response format unexpected (no data array): ${JSON.stringify(data)}`);
+        throw new Error(`Unexpected response format: ${JSON.stringify(data)}`);
       }
 
       const item = data.data[0];
+      if (item.url) return item.url;
+      if (item.b64_json) return `data:image/png;base64,${item.b64_json}`;
 
-      // Check 1: Standard URL
-      if (item.url) {
-        return item.url;
-      }
-
-      // Check 2: Base64 JSON (b64_json)
-      if (item.b64_json) {
-        return `data:image/png;base64,${item.b64_json}`;
-      }
-
-      // If we reach here, neither url nor b64_json was found
-      throw new Error(`Response format unexpected (missing url or b64_json): ${JSON.stringify(data)}`);
-
-    } catch (error) {
-      console.error("Image Generation Error:", error);
-      throw error;
+      throw new Error(`Response missing url or b64_json: ${JSON.stringify(data)}`);
     }
+
+  } catch (error) {
+    console.error("Image Gen Error:", error);
+    throw error;
   }
 };
 
 export const generateVideo = async (
   prompt: string,
   settings: Settings,
-  model: string
+  model: string,
+  endpointPath: string,
+  customBaseUrl: string,
+  customApiKey: string | undefined,
+  imageBase64?: string | null
 ): Promise<string> => {
-  // A. Path Normalization
-  // Ensure we don't end up with /v1/v1/videos
-  const rawBaseUrl = settings.baseUrl.trim().replace(/\/+$/, ''); // Remove trailing slashes
-  let url = '';
-
-  if (rawBaseUrl.endsWith('/v1')) {
-    url = `${rawBaseUrl}/videos`;
-  } else {
-    url = `${rawBaseUrl}/v1/videos`;
-  }
-
+  const url = constructUrl(settings.baseUrl, endpointPath, customBaseUrl);
+  const apiKey = customApiKey?.trim() || settings.apiKey;
+  
   try {
+    const payload: any = {
+      model: model || MODELS.VIDEO_DEFAULT,
+      prompt: prompt
+    };
+
+    // Inject Image for Image-to-Video
+    if (imageBase64) {
+      payload.image_url = imageBase64;
+    }
+
     const response = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${settings.apiKey}`,
+        'Authorization': `Bearer ${apiKey}`,
       },
-      // C. Minimal Payload
-      body: JSON.stringify({
-        model: model || MODELS.VIDEO_DEFAULT,
-        prompt: prompt
-      }),
+      body: JSON.stringify(payload),
     });
 
     if (!response.ok) {
-        // B. Reveal the Error (Debug Mode)
         const status = response.status;
         let errorBody = "";
-        
         try {
-            // Try parsing JSON error first
-            const json = await response.json();
-            errorBody = json.error?.message || JSON.stringify(json);
-        } catch {
+            const text = await response.text();
             try {
-                // Fallback to text
-                errorBody = await response.text();
+                // Try to pretty print JSON error
+                const json = JSON.parse(text);
+                errorBody = json.error?.message || JSON.stringify(json);
             } catch {
-                errorBody = "No response body";
+                // Fallback to raw text (could be HTML)
+                errorBody = text;
             }
+        } catch {
+            errorBody = "No response body";
         }
-
         throw new Error(`Video Gen Failed [${status}]: ${errorBody.slice(0, 200)}`);
     }
 
-    const data = await response.json();
-    return data.data?.[0]?.url || "";
+    // Safe JSON Parsing to catch HTML responses (Standard 404/500 pages hiding behind 200 OK)
+    const text = await response.text();
+    let data;
+    try {
+        data = JSON.parse(text);
+    } catch (e) {
+        throw new Error(`Invalid JSON response (likely HTML): ${text.slice(0, 200)}...`);
+    }
+
+    // Strict Validation: Check for URL in standard location
+    // Typically data.data[0].url
+    const videoUrl = data.data?.[0]?.url;
+
+    if (videoUrl && typeof videoUrl === 'string' && videoUrl.length > 0) {
+        return videoUrl;
+    }
+
+    // If we are here, we got a 200 OK but couldn't find the URL.
+    // Throw error with raw JSON to help debug what the provider actually returned.
+    throw new Error("API Response (No URL found): " + JSON.stringify(data));
+    
   } catch (error) {
     console.error("Video Generation Error:", error);
     throw error;

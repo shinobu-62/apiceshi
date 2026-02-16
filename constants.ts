@@ -9,10 +9,11 @@ export const CHAT_MODELS = [
 ];
 
 export const IMAGE_MODELS = [
-  { label: "Nano Banana (快速版)", value: "gemini-2.5-flash-image-preview" },
-  { label: "Nano Banana Pro (专业版)", value: "gemini-3-pro-image-preview" },
-  { label: "GPT Image 1", value: "gpt-image-1" },
-  { label: "GPT Image 1.5 (最新版)", value: "gpt-image-1.5" }
+  { label: "Nano Banana (Gemini Image)", value: "gemini-2.5-flash-image-preview" },
+  { label: "Nano Banana Pro (Gemini Image)", value: "gemini-3-pro-image-preview" },
+  { label: "GPT Image 1", value: "gpt-image-1-all" },
+  { label: "GPT Image 1.5", value: "gpt-image-1.5" },
+  { label: "DALL-E 3", value: "dall-e-3" }
 ];
 
 export const IMAGE_SIZES = [
@@ -23,8 +24,28 @@ export const IMAGE_SIZES = [
 
 export const VIDEO_MODELS = [
   { label: "Google Veo (Fast)", value: "veo_3_1-fast" },
-  { label: "Runway Gen-3", value: "runway-gen3-alpha" }
+  { label: "Runway Gen-3", value: "runway-gen3-alpha" },
+  { label: "Sora", value: "sora-1.0-turbo" },
+  { label: "Kling", value: "kling-v1" }
 ];
+
+export const ENDPOINT_PRESETS = {
+  CHAT: [
+    "/v1/chat/completions",
+    "/chat/completions"
+  ],
+  IMAGE: [
+    "/v1/images/generations",
+    "/v1/chat/completions", // For Gemini/Nano image generation via chat
+    "/images/generations"
+  ],
+  VIDEO: [
+    "/v1/videos",
+    "/v1/video/generations",
+    "/openai-video",
+    "/v1/luma/generations"
+  ]
+};
 
 export const MODELS = {
   CHAT_DEFAULT: CHAT_MODELS[0].value,

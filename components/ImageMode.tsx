@@ -1,8 +1,10 @@
-import React, { useState } from 'react';
-import { Image as ImageIcon, Sparkles, Download, XCircle } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { Image as ImageIcon, Sparkles, Download, XCircle, Globe, UploadCloud, X, Key, Trash2 } from 'lucide-react';
 import { useSettings } from '../context/SettingsContext';
 import { generateImage } from '../services/ai';
-import { IMAGE_MODELS, IMAGE_SIZES } from '../constants';
+import { IMAGE_MODELS, IMAGE_SIZES, ENDPOINT_PRESETS } from '../constants';
+
+const STORAGE_KEY_CUSTOM_MODELS = 'nexus_custom_models_image';
 
 const ImageMode: React.FC = () => {
   const { settings } = useSettings();
@@ -10,8 +12,49 @@ const ImageMode: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [selectedModel, setSelectedModel] = useState(IMAGE_MODELS[0].value);
+  
+  // God Mode inputs
+  const [model, setModel] = useState(IMAGE_MODELS[0].value);
+  const [endpoint, setEndpoint] = useState(ENDPOINT_PRESETS.IMAGE[0]);
   const [selectedSize, setSelectedSize] = useState(IMAGE_SIZES[0].value);
+  const [customBaseUrl, setCustomBaseUrl] = useState('');
+  const [customApiKey, setCustomApiKey] = useState('');
+
+  // Smart Model Memory
+  const [customModels, setCustomModels] = useState<string[]>([]);
+
+  // Source Image State
+  const [sourceImage, setSourceImage] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    // Load custom models
+    const stored = localStorage.getItem(STORAGE_KEY_CUSTOM_MODELS);
+    if (stored) {
+      try {
+        setCustomModels(JSON.parse(stored));
+      } catch (e) {
+        console.error("Failed to parse custom models", e);
+      }
+    }
+  }, []);
+
+  const saveModelToMemory = (newModel: string) => {
+    if (!newModel.trim()) return;
+    const isDefault = IMAGE_MODELS.some(m => m.value === newModel);
+    if (isDefault) return;
+
+    if (!customModels.includes(newModel)) {
+      const updated = [...customModels, newModel];
+      setCustomModels(updated);
+      localStorage.setItem(STORAGE_KEY_CUSTOM_MODELS, JSON.stringify(updated));
+    }
+  };
+
+  const clearCustomModels = () => {
+    setCustomModels([]);
+    localStorage.removeItem(STORAGE_KEY_CUSTOM_MODELS);
+  };
 
   const handleGenerate = async () => {
     if (!prompt.trim()) return;
@@ -19,13 +62,40 @@ const ImageMode: React.FC = () => {
     setError(null);
     setImageUrl(null);
 
+    // Save model to memory
+    saveModelToMemory(model);
+
     try {
-      const url = await generateImage(prompt, settings, selectedModel, selectedSize);
+      const url = await generateImage(prompt, settings, model, selectedSize, endpoint, customBaseUrl, customApiKey, sourceImage);
       setImageUrl(url);
     } catch (err) {
-      setError(err instanceof Error ? err.message : '生成失败');
+      setError(err instanceof Error ? err.message : 'Generation Failed');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setSourceImage(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    const file = e.dataTransfer.files?.[0];
+    if (file && file.type.startsWith('image/')) {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+            setSourceImage(reader.result as string);
+        };
+        reader.readAsDataURL(file);
     }
   };
 
@@ -34,50 +104,134 @@ const ImageMode: React.FC = () => {
       
       {/* Input Section */}
       <div className="bg-nexus-900/50 p-6 rounded-2xl border border-nexus-800 shadow-lg">
-        <div className="flex justify-between items-center mb-2">
-            <label className="block text-sm font-medium text-nexus-cyan uppercase tracking-wide">
-                图像提示词
-            </label>
-            <div className="flex gap-3">
-                {/* Size Selector */}
-                <div className="relative">
-                    <select 
-                        value={selectedSize}
-                        onChange={(e) => setSelectedSize(e.target.value)}
-                        className="bg-nexus-950 border border-nexus-800 text-xs text-gray-300 rounded-lg px-3 py-1.5 focus:outline-none focus:border-nexus-cyan focus:ring-1 focus:ring-nexus-cyan appearance-none cursor-pointer hover:bg-nexus-900 transition-colors pr-8"
-                    >
-                        {IMAGE_SIZES.map(size => (
-                            <option key={size.value} value={size.value}>{size.label}</option>
-                        ))}
-                    </select>
-                    <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-500">
-                        <svg className="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z"/></svg>
-                    </div>
+        
+        {/* God Mode Config Row */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-4">
+            
+            {/* Model Input */}
+            <div className="lg:col-span-1">
+                <div className="flex justify-between items-center mb-1">
+                    <label className="text-xs font-bold text-nexus-cyan uppercase">Model ID</label>
+                    {customModels.length > 0 && (
+                        <button onClick={clearCustomModels} className="text-[10px] text-red-400 hover:text-red-300">
+                            <Trash2 className="w-3 h-3" />
+                        </button>
+                    )}
                 </div>
+                <input 
+                    list="image-models" 
+                    value={model} 
+                    onChange={(e) => setModel(e.target.value)} 
+                    className="w-full bg-nexus-950 border border-nexus-800 text-sm text-white rounded-lg px-3 py-2 focus:outline-none focus:border-nexus-cyan"
+                    placeholder="e.g. dall-e-3"
+                />
+                <datalist id="image-models">
+                    {IMAGE_MODELS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+                    {customModels.map(m => <option key={m} value={m}>Custom: {m}</option>)}
+                </datalist>
+            </div>
 
-                {/* Model Selector */}
-                <div className="relative">
-                    <select 
-                        value={selectedModel}
-                        onChange={(e) => setSelectedModel(e.target.value)}
-                        className="bg-nexus-950 border border-nexus-800 text-xs text-gray-300 rounded-lg px-3 py-1.5 focus:outline-none focus:border-nexus-cyan focus:ring-1 focus:ring-nexus-cyan appearance-none cursor-pointer hover:bg-nexus-900 transition-colors pr-8"
-                    >
-                        {IMAGE_MODELS.map(model => (
-                            <option key={model.value} value={model.value}>{model.label}</option>
-                        ))}
-                    </select>
-                    <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-500">
-                        <svg className="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z"/></svg>
-                    </div>
-                </div>
+             {/* Endpoint Input */}
+             <div className="lg:col-span-1">
+                <label className="block text-xs font-bold text-nexus-cyan uppercase mb-1">Endpoint Path</label>
+                <input 
+                    list="image-endpoints" 
+                    value={endpoint} 
+                    onChange={(e) => setEndpoint(e.target.value)} 
+                    className="w-full bg-nexus-950 border border-nexus-800 text-sm text-white rounded-lg px-3 py-2 focus:outline-none focus:border-nexus-cyan"
+                    placeholder="/v1/images/generations"
+                />
+                <datalist id="image-endpoints">
+                    {ENDPOINT_PRESETS.IMAGE.map(e => <option key={e} value={e} />)}
+                </datalist>
+            </div>
+
+            {/* Custom URL */}
+            <div className="lg:col-span-1">
+                <label className="block text-xs font-bold text-nexus-cyan uppercase mb-1 flex items-center gap-1">
+                    <Globe className="w-3 h-3" /> Custom Host
+                </label>
+                <input 
+                    type="text"
+                    value={customBaseUrl} 
+                    onChange={(e) => setCustomBaseUrl(e.target.value)} 
+                    className="w-full bg-nexus-950 border border-nexus-800 text-sm text-white rounded-lg px-3 py-2 focus:outline-none focus:border-nexus-cyan placeholder-gray-600"
+                    placeholder="Optional override"
+                />
+            </div>
+            
+             {/* Custom Key */}
+             <div className="lg:col-span-1">
+                <label className="block text-xs font-bold text-nexus-cyan uppercase mb-1 flex items-center gap-1">
+                    <Key className="w-3 h-3" /> Custom Key
+                </label>
+                <input 
+                    type="password"
+                    value={customApiKey} 
+                    onChange={(e) => setCustomApiKey(e.target.value)} 
+                    className="w-full bg-nexus-950 border border-nexus-800 text-sm text-white rounded-lg px-3 py-2 focus:outline-none focus:border-nexus-cyan placeholder-gray-600"
+                    placeholder="Optional override"
+                />
+            </div>
+
+            {/* Size Selector */}
+            <div className="lg:col-span-1">
+                <label className="block text-xs font-bold text-nexus-cyan uppercase mb-1">Size</label>
+                <select 
+                    value={selectedSize}
+                    onChange={(e) => setSelectedSize(e.target.value)}
+                    className="w-full bg-nexus-950 border border-nexus-800 text-sm text-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:border-nexus-cyan"
+                >
+                    {IMAGE_SIZES.map(size => (
+                        <option key={size.value} value={size.value}>{size.label}</option>
+                    ))}
+                </select>
             </div>
         </div>
         
+        {/* Reference Image Drag & Drop */}
+        <div 
+            className="mb-4 relative group"
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={handleDrop}
+        >
+             <input 
+                type="file" 
+                ref={fileInputRef} 
+                onChange={handleFileSelect} 
+                className="hidden" 
+                accept="image/*" 
+            />
+            {sourceImage ? (
+                <div className="relative w-full h-24 bg-nexus-950/50 border border-nexus-700 border-dashed rounded-xl flex items-center p-2 gap-4">
+                     <img src={sourceImage} alt="Ref" className="h-20 w-auto rounded-lg border border-nexus-600" />
+                     <div className="flex-1">
+                        <p className="text-sm text-white font-medium">Reference Image Loaded</p>
+                        <p className="text-xs text-gray-400">Used for Img2Img or Vision prompts.</p>
+                     </div>
+                     <button 
+                        onClick={() => setSourceImage(null)}
+                        className="p-2 bg-nexus-800 hover:bg-red-900/50 text-gray-400 hover:text-red-400 rounded-lg transition-colors"
+                     >
+                        <X className="w-5 h-5" />
+                     </button>
+                </div>
+            ) : (
+                <div 
+                    onClick={() => fileInputRef.current?.click()}
+                    className="w-full h-16 border border-nexus-800 border-dashed rounded-xl flex items-center justify-center gap-2 text-gray-500 hover:text-nexus-cyan hover:border-nexus-cyan/50 hover:bg-nexus-900/30 transition-all cursor-pointer"
+                >
+                    <UploadCloud className="w-5 h-5" />
+                    <span className="text-sm">Drag reference image here or click to upload (Optional)</span>
+                </div>
+            )}
+        </div>
+
         <div className="flex gap-4">
             <textarea
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
-                placeholder="赛博朋克风格的雨夜街道..."
+                placeholder="Describe your image..."
                 className="flex-1 bg-nexus-950 border border-nexus-800 text-white rounded-xl p-4 focus:outline-none focus:border-nexus-cyan focus:ring-1 focus:ring-nexus-cyan transition-all resize-none h-24"
             />
             <button
@@ -90,7 +244,7 @@ const ImageMode: React.FC = () => {
                 ) : (
                     <>
                         <Sparkles className="w-6 h-6" />
-                        <span>生成</span>
+                        <span>Generate</span>
                     </>
                 )}
             </button>
@@ -102,22 +256,22 @@ const ImageMode: React.FC = () => {
         {loading && (
             <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/50 z-10 backdrop-blur-sm">
                 <div className="w-16 h-16 border-4 border-nexus-cyan border-t-transparent rounded-full animate-spin mb-4"></div>
-                <p className="text-nexus-cyan font-mono animate-pulse">正在构建视觉数据...</p>
+                <p className="text-nexus-cyan font-mono animate-pulse">Constructing Visual Data...</p>
             </div>
         )}
 
         {error && (
              <div className="text-center p-8 max-w-md">
                 <XCircle className="w-12 h-12 text-red-500 mx-auto mb-4" />
-                <h3 className="text-xl text-white font-bold mb-2">生成失败</h3>
-                <p className="text-red-300">{error}</p>
+                <h3 className="text-xl text-white font-bold mb-2">Generation Failed</h3>
+                <p className="text-red-300 break-words font-mono text-xs">{error}</p>
              </div>
         )}
 
         {!loading && !imageUrl && !error && (
             <div className="text-center text-nexus-700">
                 <ImageIcon className="w-16 h-16 mx-auto mb-4 opacity-50" />
-                <p>输入提示词以生成图像。</p>
+                <p>Enter prompt to generate.</p>
             </div>
         )}
 
@@ -137,7 +291,7 @@ const ImageMode: React.FC = () => {
                         className="flex items-center gap-2 px-4 py-2 bg-nexus-800 hover:bg-nexus-700 text-white rounded-lg transition-colors border border-nexus-700"
                      >
                         <Download className="w-4 h-4" />
-                        打开原图
+                        Open Original
                      </a>
                 </div>
             </div>
