@@ -9,8 +9,8 @@ export const CHAT_MODELS = [
 ];
 
 export const IMAGE_MODELS = [
-  { label: "Nano Banana (Gemini Image)", value: "gemini-2.5-flash-image-preview" },
-  { label: "Nano Banana Pro (Gemini Image)", value: "gemini-3-pro-image-preview" },
+  { label: "Nano Banana", value: "gemini-2.5-flash-image-preview" },
+  { label: "Nano Banana Pro", value: "gemini-3-pro-image-preview" },
   { label: "GPT Image 1", value: "gpt-image-1-all" },
   { label: "GPT Image 1.5", value: "gpt-image-1.5" },
   { label: "DALL-E 3", value: "dall-e-3" }
