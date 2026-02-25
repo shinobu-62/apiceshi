@@ -229,14 +229,30 @@ export const generateVideo = async (
   const apiKey = customApiKey?.trim() || settings.apiKey;
   
   try {
-    const payload: any = {
-      model: model || MODELS.VIDEO_DEFAULT,
-      prompt: prompt
-    };
+    // Payload Construction Logic
+    const isVeoCreate = endpointPath.includes("/video/create");
+    let payload: any = {};
 
-    // Inject Image for Image-to-Video
-    if (imageBase64) {
-      payload.image_url = imageBase64;
+    if (isVeoCreate) {
+        // Veo / VectorEngine Specific Payload
+        payload = {
+            model: model || MODELS.VIDEO_DEFAULT,
+            prompt: prompt,
+            images: imageBase64 ? [imageBase64] : [], // Must be an array of strings
+            enhance_prompt: true,
+            aspect_ratio: "16:9",
+            enable_upsample: true
+        };
+    } else {
+        // Standard / Fallback Payload
+        payload = {
+            model: model || MODELS.VIDEO_DEFAULT,
+            prompt: prompt
+        };
+        // Inject Image for Standard Image-to-Video
+        if (imageBase64) {
+            payload.image_url = imageBase64;
+        }
     }
 
     const response = await fetch(url, {
