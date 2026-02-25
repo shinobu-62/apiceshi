@@ -222,7 +222,8 @@ export const generateVideo = async (
   endpointPath: string,
   customBaseUrl: string,
   customApiKey: string | undefined,
-  imageBase64?: string | null
+  imageBase64?: string | null,
+  customPollingPath?: string
 ): Promise<string> => {
   const url = constructUrl(settings.baseUrl, endpointPath, customBaseUrl);
   const apiKey = customApiKey?.trim() || settings.apiKey;
@@ -302,7 +303,17 @@ export const generateVideo = async (
 
             // Construct Polling URL - Smart Logic
             let pollingPath = "";
-            if (endpointPath.includes("/create")) {
+            
+            if (customPollingPath && customPollingPath.trim().length > 0) {
+                // User provided custom polling path
+                let cleanCustomPath = customPollingPath.trim();
+                // Ensure it ends with slash if it's a directory-style path, or just append ID
+                // Usually user enters "/v1/video/status/"
+                if (!cleanCustomPath.endsWith('/')) {
+                    cleanCustomPath += '/';
+                }
+                pollingPath = cleanCustomPath + encodedTaskId;
+            } else if (endpointPath.includes("/create")) {
                 // e.g., /v1/video/create -> /v1/video/status/{taskId}
                 pollingPath = endpointPath.replace("/create", "/status/") + encodedTaskId;
             } else if (endpointPath.endsWith("s")) {
@@ -327,18 +338,19 @@ export const generateVideo = async (
                 });
 
                 if (!pollResponse.ok) {
-                    // CRITICAL: If 404, do NOT throw immediately. Just wait and retry.
+                    // CRITICAL: If 404 or invalid request, FAIL immediately to stop infinite loop
                     if (pollResponse.status === 404) {
-                         console.warn(`Task not found (404) during polling. Retrying...`);
-                         continue;
+                         throw new Error(`Polling Error: 404 Not Found at ${pollingUrl} - Please check your POLLING PATH.`);
+                    }
+                    
+                    if (pollResponse.status >= 400 && pollResponse.status < 500) {
+                         const errText = await pollResponse.text();
+                         throw new Error(`Polling Error [${pollResponse.status}]: ${errText} - Please check your POLLING PATH.`);
                     }
                     
                     console.warn(`Polling request failed: ${pollResponse.status}`);
-                    // For other errors, we might want to continue or throw. 
-                    // Let's continue for 500s as they might be transient.
+                    // For 500s, we might want to continue as they might be transient.
                     if (pollResponse.status >= 500) continue;
-                    
-                    throw new Error(`Polling failed with status ${pollResponse.status}`);
                 }
 
                 const pollText = await pollResponse.text();
@@ -350,15 +362,23 @@ export const generateVideo = async (
                     continue;
                 }
 
+                // Check for API-level errors in JSON (e.g. invalid_request_error)
+                if (pollData.error && pollData.error.type === 'invalid_request_error') {
+                     throw new Error("Polling Error: " + JSON.stringify(pollData.error) + " - Please check your POLLING PATH.");
+                }
+
                 // Update Status
                 // Check various common locations for status
                 currentStatus = pollData.status || pollData.task_status || pollData.data?.status || currentStatus;
                 
                 console.log(`Task Status: ${currentStatus}`);
 
-                if (currentStatus === 'success' || currentStatus === 'succeeded' || currentStatus === 'completed') {
+                // Check for success (including uppercase SUCCESS as requested)
+                if (currentStatus === 'SUCCESS' || currentStatus === 'success' || currentStatus === 'succeeded' || currentStatus === 'completed') {
                     // Extract URL
-                    const finalUrl = pollData.video_url || pollData.url || pollData.data?.url || pollData.data?.video_url || pollData.data?.[0]?.url;
+                    // Prioritize pollData.data?.video_url as requested
+                    const finalUrl = pollData.data?.video_url || pollData.video_url || pollData.url || pollData.data?.url || pollData.data?.[0]?.url;
+                    
                     if (finalUrl) return finalUrl;
                     throw new Error("Task completed but no video URL found in response: " + JSON.stringify(pollData));
                 }
@@ -369,9 +389,6 @@ export const generateVideo = async (
 
             } catch (pollError) {
                 console.error("Polling Error:", pollError);
-                // If it's the specific error we threw above, rethrow it.
-                // Otherwise, if it's a network error, maybe we should continue? 
-                // For now, let's rethrow to be safe, unless it was the 404 logic which we handled with 'continue'
                 throw pollError; 
             }
         }

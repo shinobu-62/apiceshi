@@ -16,6 +16,7 @@ const VideoMode: React.FC = () => {
   // God Mode Inputs
   const [model, setModel] = useState(VIDEO_MODELS[0].value);
   const [endpoint, setEndpoint] = useState(ENDPOINT_PRESETS.VIDEO[0]);
+  const [pollingPath, setPollingPath] = useState('');
   const [customBaseUrl, setCustomBaseUrl] = useState('');
   const [customApiKey, setCustomApiKey] = useState('');
 
@@ -65,7 +66,7 @@ const VideoMode: React.FC = () => {
     saveModelToMemory(model);
 
     try {
-      const url = await generateVideo(prompt, settings, model, endpoint, customBaseUrl, customApiKey, sourceImage);
+      const url = await generateVideo(prompt, settings, model, endpoint, customBaseUrl, customApiKey, sourceImage, pollingPath);
       setVideoUrl(url);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Video Generation Failed');
@@ -149,6 +150,18 @@ const VideoMode: React.FC = () => {
                 <datalist id="video-endpoints">
                     {ENDPOINT_PRESETS.VIDEO.map(e => <option key={e} value={e} />)}
                 </datalist>
+            </div>
+
+            {/* Polling Path Input */}
+            <div className="lg:col-span-1">
+                <label className="block text-xs font-bold text-pink-500 uppercase mb-1">Polling Path (Optional)</label>
+                <input 
+                    type="text"
+                    value={pollingPath} 
+                    onChange={(e) => setPollingPath(e.target.value)} 
+                    className="w-full bg-nexus-950 border border-nexus-800 text-sm text-white rounded-lg px-3 py-2 focus:outline-none focus:border-pink-500 placeholder-gray-600"
+                    placeholder="e.g. /v1/tasks/"
+                />
             </div>
 
             {/* Custom URL */}
