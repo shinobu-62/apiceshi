@@ -283,7 +283,86 @@ export const generateVideo = async (
         return videoUrl;
     }
 
-    // If we are here, we got a 200 OK but couldn't find the URL.
+    // --- ASYNC POLLING LOGIC ---
+    // Check if we received a Task ID instead of a URL
+    const taskId = data.id || data.task_id || data.data?.id || data.data?.task_id;
+    let currentStatus = data.status || data.task_status || data.data?.status;
+
+    if (taskId && (currentStatus === 'pending' || currentStatus === 'processing' || currentStatus === 'queued')) {
+        console.log(`Video Generation initiated (Async). Task ID: ${taskId}, Status: ${currentStatus}`);
+        
+        const maxAttempts = 60; // 10 minutes max (60 * 10s)
+        let attempts = 0;
+
+        while ((currentStatus === 'pending' || currentStatus === 'processing' || currentStatus === 'queued') && attempts < maxAttempts) {
+            attempts++;
+            // Wait 10 seconds
+            await new Promise(resolve => setTimeout(resolve, 10000));
+
+            // Construct Polling URL
+            // We assume the base URL is correct and append the standard status endpoint
+            // If the original endpoint was /v1/video/create, we want /v1/video/status/{id}
+            // We use the same base URL logic as the initial request
+            const pollingEndpoint = `/v1/video/status/${taskId}`;
+            const pollingUrl = constructUrl(settings.baseUrl, pollingEndpoint, customBaseUrl);
+
+            console.log(`Polling attempt ${attempts}/${maxAttempts}: ${pollingUrl}`);
+
+            try {
+                const pollResponse = await fetch(pollingUrl, {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${apiKey}`,
+                    },
+                });
+
+                if (!pollResponse.ok) {
+                    // If polling fails (e.g. 500 or 404), we might want to retry or abort. 
+                    // For now, let's log and continue, hoping it's transient, unless it's a 400+ that implies the task is gone.
+                    if (pollResponse.status === 404) throw new Error("Task not found during polling.");
+                    console.warn(`Polling request failed: ${pollResponse.status}`);
+                    continue; 
+                }
+
+                const pollText = await pollResponse.text();
+                let pollData;
+                try {
+                    pollData = JSON.parse(pollText);
+                } catch {
+                    console.warn("Invalid JSON in poll response");
+                    continue;
+                }
+
+                // Update Status
+                // Check various common locations for status
+                currentStatus = pollData.status || pollData.task_status || pollData.data?.status || currentStatus;
+                
+                console.log(`Task Status: ${currentStatus}`);
+
+                if (currentStatus === 'success' || currentStatus === 'succeeded' || currentStatus === 'completed') {
+                    // Extract URL
+                    const finalUrl = pollData.video_url || pollData.url || pollData.data?.url || pollData.data?.video_url || pollData.data?.[0]?.url;
+                    if (finalUrl) return finalUrl;
+                    throw new Error("Task completed but no video URL found in response: " + JSON.stringify(pollData));
+                }
+
+                if (currentStatus === 'failed' || currentStatus === 'fail') {
+                    throw new Error(`Video generation failed: ${pollData.fail_reason || pollData.error || 'Unknown error'}`);
+                }
+
+            } catch (pollError) {
+                console.error("Polling Error:", pollError);
+                throw pollError; // Break loop and fail
+            }
+        }
+        
+        if (attempts >= maxAttempts) {
+            throw new Error("Video generation timed out after 10 minutes.");
+        }
+    }
+
+    // If we are here, we got a 200 OK but couldn't find the URL and it wasn't a recognized async task.
     // Throw error with raw JSON to help debug what the provider actually returned.
     throw new Error("API Response (No URL found): " + JSON.stringify(data));
     

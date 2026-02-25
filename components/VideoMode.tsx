@@ -248,7 +248,8 @@ const VideoMode: React.FC = () => {
             <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 z-10 backdrop-blur-sm">
                  <div className="w-16 h-16 border-4 border-pink-500 border-t-transparent rounded-full animate-spin mb-4"></div>
                 <p className="text-pink-500 font-mono animate-pulse font-bold text-lg">Rendering Video...</p>
-                <p className="text-gray-400 text-sm mt-2">Do not close the tab.</p>
+                <p className="text-gray-400 text-sm mt-2">Please wait (Polling for result)...</p>
+                <p className="text-gray-500 text-xs mt-1">Do not close the tab.</p>
             </div>
         )}
 
