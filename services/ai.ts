@@ -293,18 +293,27 @@ export const generateVideo = async (
         
         const maxAttempts = 60; // 10 minutes max (60 * 10s)
         let attempts = 0;
+        const encodedTaskId = encodeURIComponent(taskId);
 
         while ((currentStatus === 'pending' || currentStatus === 'processing' || currentStatus === 'queued') && attempts < maxAttempts) {
             attempts++;
             // Wait 10 seconds
             await new Promise(resolve => setTimeout(resolve, 10000));
 
-            // Construct Polling URL
-            // We assume the base URL is correct and append the standard status endpoint
-            // If the original endpoint was /v1/video/create, we want /v1/video/status/{id}
-            // We use the same base URL logic as the initial request
-            const pollingEndpoint = `/v1/video/status/${taskId}`;
-            const pollingUrl = constructUrl(settings.baseUrl, pollingEndpoint, customBaseUrl);
+            // Construct Polling URL - Smart Logic
+            let pollingPath = "";
+            if (endpointPath.includes("/create")) {
+                // e.g., /v1/video/create -> /v1/video/status/{taskId}
+                pollingPath = endpointPath.replace("/create", "/status/") + encodedTaskId;
+            } else if (endpointPath.endsWith("s")) {
+                // e.g., /v1/videos -> /v1/videos/{taskId}
+                pollingPath = endpointPath + "/" + encodedTaskId;
+            } else {
+                // Safe Fallback
+                pollingPath = "/v1/video/status/" + encodedTaskId;
+            }
+
+            const pollingUrl = constructUrl(settings.baseUrl, pollingPath, customBaseUrl);
 
             console.log(`Polling attempt ${attempts}/${maxAttempts}: ${pollingUrl}`);
 
@@ -318,11 +327,18 @@ export const generateVideo = async (
                 });
 
                 if (!pollResponse.ok) {
-                    // If polling fails (e.g. 500 or 404), we might want to retry or abort. 
-                    // For now, let's log and continue, hoping it's transient, unless it's a 400+ that implies the task is gone.
-                    if (pollResponse.status === 404) throw new Error("Task not found during polling.");
+                    // CRITICAL: If 404, do NOT throw immediately. Just wait and retry.
+                    if (pollResponse.status === 404) {
+                         console.warn(`Task not found (404) during polling. Retrying...`);
+                         continue;
+                    }
+                    
                     console.warn(`Polling request failed: ${pollResponse.status}`);
-                    continue; 
+                    // For other errors, we might want to continue or throw. 
+                    // Let's continue for 500s as they might be transient.
+                    if (pollResponse.status >= 500) continue;
+                    
+                    throw new Error(`Polling failed with status ${pollResponse.status}`);
                 }
 
                 const pollText = await pollResponse.text();
@@ -353,7 +369,10 @@ export const generateVideo = async (
 
             } catch (pollError) {
                 console.error("Polling Error:", pollError);
-                throw pollError; // Break loop and fail
+                // If it's the specific error we threw above, rethrow it.
+                // Otherwise, if it's a network error, maybe we should continue? 
+                // For now, let's rethrow to be safe, unless it was the 404 logic which we handled with 'continue'
+                throw pollError; 
             }
         }
         
