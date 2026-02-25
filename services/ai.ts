@@ -285,8 +285,8 @@ export const generateVideo = async (
     }
 
     // --- ASYNC POLLING LOGIC ---
-    // Check if we received a Task ID instead of a URL
-    const taskId = data.id || data.task_id || data.data?.id || data.data?.task_id;
+    // Strict Task ID Extraction
+    const taskId = data.id || (data.data && data.data.id) || data.task_id;
     let currentStatus = data.status || data.task_status || data.data?.status;
 
     if (taskId && (currentStatus === 'pending' || currentStatus === 'processing' || currentStatus === 'queued')) {
@@ -294,42 +294,44 @@ export const generateVideo = async (
         
         const maxAttempts = 60; // 10 minutes max (60 * 10s)
         let attempts = 0;
-        const encodedTaskId = encodeURIComponent(taskId);
+        
+        // Determine Polling Path Prefix (without ID)
+        let pollingPathPrefix = "";
+        if (customPollingPath && customPollingPath.trim().length > 0) {
+             pollingPathPrefix = customPollingPath.trim();
+        } else if (endpointPath.includes("/create")) {
+             pollingPathPrefix = endpointPath.replace("/create", "/status/");
+        } else if (endpointPath.endsWith("s")) {
+             pollingPathPrefix = endpointPath; // e.g. /v1/videos
+        } else {
+             pollingPathPrefix = "/v1/video/status/";
+        }
 
         while ((currentStatus === 'pending' || currentStatus === 'processing' || currentStatus === 'queued') && attempts < maxAttempts) {
             attempts++;
             // Wait 10 seconds
             await new Promise(resolve => setTimeout(resolve, 10000));
 
-            // Construct Polling URL - Smart Logic
-            let pollingPath = "";
+            // Bulletproof URL Construction
+            const base = customBaseUrl || settings.baseUrl;
+            const safeBase = base.replace(/\/$/, ""); // Remove trailing slash
+            let safePath = pollingPathPrefix || "";
+            if (!safePath.startsWith("/")) safePath = "/" + safePath;
             
-            if (customPollingPath && customPollingPath.trim().length > 0) {
-                // User provided custom polling path
-                let cleanCustomPath = customPollingPath.trim();
-                // Ensure it ends with slash if it's a directory-style path, or just append ID
-                // Usually user enters "/v1/video/status/"
-                if (!cleanCustomPath.endsWith('/')) {
-                    cleanCustomPath += '/';
-                }
-                pollingPath = cleanCustomPath + encodedTaskId;
-            } else if (endpointPath.includes("/create")) {
-                // e.g., /v1/video/create -> /v1/video/status/{taskId}
-                pollingPath = endpointPath.replace("/create", "/status/") + encodedTaskId;
-            } else if (endpointPath.endsWith("s")) {
-                // e.g., /v1/videos -> /v1/videos/{taskId}
-                pollingPath = endpointPath + "/" + encodedTaskId;
+            let finalPollingUrl = "";
+            if (safePath.includes("?id=")) {
+                finalPollingUrl = `${safeBase}${safePath}${taskId}`;
+            } else if (safePath.includes("query")) {
+                finalPollingUrl = `${safeBase}${safePath}?id=${taskId}`;
             } else {
-                // Safe Fallback
-                pollingPath = "/v1/video/status/" + encodedTaskId;
+                // Standard RESTful appending
+                finalPollingUrl = `${safeBase}${safePath.endsWith("/") ? safePath : safePath + "/"}${taskId}`;
             }
 
-            const pollingUrl = constructUrl(settings.baseUrl, pollingPath, customBaseUrl);
-
-            console.log(`Polling attempt ${attempts}/${maxAttempts}: ${pollingUrl}`);
+            console.log(`Polling attempt ${attempts}/${maxAttempts}: ${finalPollingUrl}`);
 
             try {
-                const pollResponse = await fetch(pollingUrl, {
+                const pollResponse = await fetch(finalPollingUrl, {
                     method: 'GET',
                     headers: {
                         'Content-Type': 'application/json',
@@ -338,14 +340,15 @@ export const generateVideo = async (
                 });
 
                 if (!pollResponse.ok) {
+                    const pollData = await pollResponse.json().catch(() => ({}));
+                    
                     // CRITICAL: If 404 or invalid request, FAIL immediately to stop infinite loop
                     if (pollResponse.status === 404) {
-                         throw new Error(`Polling Error: 404 Not Found at ${pollingUrl} - Please check your POLLING PATH.`);
+                         throw new Error(`Polling Error: 404 Not Found at ${finalPollingUrl} - Please check your POLLING PATH.`);
                     }
                     
                     if (pollResponse.status >= 400 && pollResponse.status < 500) {
-                         const errText = await pollResponse.text();
-                         throw new Error(`Polling Error [${pollResponse.status}]: ${errText} - Please check your POLLING PATH.`);
+                         throw new Error(`Polling Error at ${finalPollingUrl}: ${JSON.stringify(pollData)}`);
                     }
                     
                     console.warn(`Polling request failed: ${pollResponse.status}`);
@@ -362,9 +365,13 @@ export const generateVideo = async (
                     continue;
                 }
 
+                if (pollData.error || pollData.status === "error") {
+                     throw new Error(`Polling Error at ${finalPollingUrl}: ${JSON.stringify(pollData)}`);
+                }
+
                 // Check for API-level errors in JSON (e.g. invalid_request_error)
                 if (pollData.error && pollData.error.type === 'invalid_request_error') {
-                     throw new Error("Polling Error: " + JSON.stringify(pollData.error) + " - Please check your POLLING PATH.");
+                     throw new Error(`Polling Error at ${finalPollingUrl}: ${JSON.stringify(pollData.error)}`);
                 }
 
                 // Update Status
@@ -396,6 +403,9 @@ export const generateVideo = async (
         if (attempts >= maxAttempts) {
             throw new Error("Video generation timed out after 10 minutes.");
         }
+    } else if (!taskId) {
+         // If we are here, we got a 200 OK but couldn't find the URL and NO Task ID.
+         throw new Error("Could not extract Task ID from creation response: " + JSON.stringify(data));
     }
 
     // If we are here, we got a 200 OK but couldn't find the URL and it wasn't a recognized async task.
