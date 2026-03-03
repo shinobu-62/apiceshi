@@ -14,9 +14,9 @@ const VideoMode: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   
   // God Mode Inputs
-  const [model, setModel] = useState(VIDEO_MODELS[0].value);
-  const [endpoint, setEndpoint] = useState(ENDPOINT_PRESETS.VIDEO[0]);
-  const [pollingPath, setPollingPath] = useState('');
+  const [model, setModel] = useState('veo3.1-fast');
+  const [endpoint, setEndpoint] = useState('/v1/video/create');
+  const [pollingPath, setPollingPath] = useState('/v1/video/query');
   const [customBaseUrl, setCustomBaseUrl] = useState('');
   const [customApiKey, setCustomApiKey] = useState('');
 

@@ -23,7 +23,7 @@ export const IMAGE_SIZES = [
 ];
 
 export const VIDEO_MODELS = [
-  { label: "Google Veo (Fast)", value: "veo_3_1-fast" },
+  { label: "Google Veo (Fast)", value: "veo3.1-fast" },
   { label: "Runway Gen-3", value: "runway-gen3-alpha" },
   { label: "Sora", value: "sora-1.0-turbo" },
   { label: "Kling", value: "kling-v1" }
@@ -40,6 +40,7 @@ export const ENDPOINT_PRESETS = {
     "/images/generations"
   ],
   VIDEO: [
+    "/v1/video/create",
     "/v1/videos",
     "/v1/video/generations",
     "/openai-video",
