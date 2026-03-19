@@ -23,7 +23,7 @@ export const IMAGE_SIZES = [
 ];
 
 export const VIDEO_MODELS = [
-  { label: "Google Veo (Fast)", value: "veo3.1-fast" },
+  { label: "Google Veo (Fast)", value: "veo3.1-fast-components" },
   { label: "Runway Gen-3", value: "runway-gen3-alpha" },
   { label: "Sora", value: "sora-1.0-turbo" },
   { label: "Kling", value: "kling-v1" }
