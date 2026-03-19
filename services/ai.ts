@@ -256,14 +256,22 @@ export const generateVideo = async (
 
       console.log(`[Video] 任务创建成功! ID: ${taskId}. 开始轮询...`);
       
+      // 4. 构建轮询 URL
       const base = customBaseUrl || settings.baseUrl;
       const safeBase = base.replace(/\/$/, "");
       let safePollPath = (customPollingPath && customPollingPath.trim().length > 0) ? customPollingPath.trim() : "/v1/video/query";
       if (!safePollPath.startsWith("/")) safePollPath = "/" + safePollPath;
       
-      const pollUrl = safePollPath.includes("?") 
+      let pollUrl = "";
+      if (safePollPath.includes("{id}")) {
+          pollUrl = `${safeBase}${safePollPath.replace("{id}", taskId)}`;
+      } else if (safePollPath.includes("query") || safePollPath.includes("?")) {
+          pollUrl = safePollPath.includes("?") 
         ? `${safeBase}${safePollPath}&id=${taskId}` 
         : `${safeBase}${safePollPath}?id=${taskId}`;
+      } else {
+          pollUrl = `${safeBase}${safePollPath.replace(/\/$/, "")}/${taskId}`;
+      }
 
       // 无脑轮询：最多查 120 次（每 5 秒一次，总计 10 分钟）
       for (let i = 0; i < 120; i++) {
