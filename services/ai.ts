@@ -5,12 +5,10 @@ import { MODELS } from '../constants';
 const constructUrl = (globalBaseUrl: string, endpointPath: string, customBaseUrl?: string): string => {
   const cleanPath = endpointPath.trim();
   
-  // 1. If the endpoint path is already a full URL, use it directly
   if (cleanPath.startsWith('http://') || cleanPath.startsWith('https://')) {
     return cleanPath;
   }
 
-  // 2. Determine which Base URL to use (Custom overrides Global)
   let baseUrlToUse = globalBaseUrl;
   if (customBaseUrl && customBaseUrl.trim().length > 0) {
     baseUrlToUse = customBaseUrl.trim();
@@ -31,7 +29,6 @@ export const streamChatCompletion = async (
   onChunk: (chunk: string) => void
 ): Promise<void> => {
   const url = constructUrl(settings.baseUrl, endpointPath, customBaseUrl);
-  // Use custom API key if provided, otherwise fallback to global settings
   const apiKey = customApiKey?.trim() || settings.apiKey;
   
   try {
@@ -102,14 +99,12 @@ export const generateImage = async (
   const selectedModel = model || MODELS.IMAGE_DEFAULT;
   const selectedSize = size || "1024x1024";
 
-  // LOGIC: If endpoint contains "chat/completions", treat as Chat-to-Image (Gemini style / Vision)
   const isChatEndpoint = endpointPath.includes('chat/completions');
 
   try {
     let payload: any = {};
     
     if (isChatEndpoint) {
-      // Construct Chat Payload (Supports Vision if image provided)
       let messagesContent: any[] = [{ type: 'text', text: prompt }];
       
       if (imageBase64) {
@@ -125,7 +120,6 @@ export const generateImage = async (
         stream: false
       };
     } else {
-      // Construct Standard Image Payload
       payload = {
         model: selectedModel,
         prompt: prompt,
@@ -133,11 +127,9 @@ export const generateImage = async (
         size: selectedSize
       };
 
-      // If an image is provided to a standard endpoint, inject it.
-      // Many proxy APIs (like some SD wrappers) accept 'image' or 'init_image'.
       if (imageBase64) {
-        payload.image = imageBase64; // Common field for img2img
-        payload.image_url = imageBase64; // Alternative common field
+        payload.image = imageBase64; 
+        payload.image_url = imageBase64; 
       }
     }
 
@@ -162,7 +154,6 @@ export const generateImage = async (
       throw new Error(errorMsg);
     }
 
-    // Safe JSON Parsing
     const text = await response.text();
     let data;
     try {
@@ -172,15 +163,11 @@ export const generateImage = async (
     }
 
     if (isChatEndpoint) {
-      // Extract from Chat Response (Markdown or URL in content)
       const content = data.choices?.[0]?.message?.content || "";
-      console.log("Raw Chat-Image Response:", content);
 
-      // 1. Markdown
       const markdownMatch = content.match(/!\[.*?\]\(((?:https?:\/\/|data:image\/)[^\)]+)\)/);
       if (markdownMatch && markdownMatch[1]) return markdownMatch[1];
 
-      // 2. Raw URL
       const urlMatch = content.match(/(https?:\/\/[^\s]+)/);
       if (urlMatch && urlMatch[1]) {
         let cleanUrl = urlMatch[1];
@@ -197,7 +184,6 @@ export const generateImage = async (
       throw new Error(`Failed to extract URL from chat response: ${debugContent}`);
 
     } else {
-      // Extract from Standard Image Response
       if (!data || !data.data || !Array.isArray(data.data) || data.data.length === 0) {
         throw new Error(`Unexpected response format: ${JSON.stringify(data)}`);
       }
@@ -215,6 +201,7 @@ export const generateImage = async (
   }
 };
 
+// 终极加固版：视频生成与无脑死等轮询逻辑
 export const generateVideo = async (
   prompt: string,
   settings: Settings,
@@ -229,207 +216,93 @@ export const generateVideo = async (
   const apiKey = customApiKey?.trim() || settings.apiKey;
   
   try {
-    // Payload Construction Logic
-    const isVeoCreate = endpointPath.includes("/video/create");
-    let payload: any = {};
+      let payload: any = {
+          model: model || MODELS.VIDEO_DEFAULT,
+          prompt: prompt
+      };
+      
+      if (endpointPath.includes("/create")) {
+          payload.images = imageBase64 ? [imageBase64] : [];
+          payload.enhance_prompt = true;
+          payload.aspect_ratio = "16:9";
+          payload.enable_upsample = true;
+      } else if (imageBase64) {
+          payload.image_url = imageBase64;
+      }
 
-    if (isVeoCreate) {
-        // Veo / VectorEngine Specific Payload
-        payload = {
-            model: model || MODELS.VIDEO_DEFAULT,
-            prompt: prompt,
-            images: imageBase64 ? [imageBase64] : [], // Must be an array of strings
-            enhance_prompt: true,
-            aspect_ratio: "16:9",
-            enable_upsample: true
-        };
-    } else {
-        // Standard / Fallback Payload
-        payload = {
-            model: model || MODELS.VIDEO_DEFAULT,
-            prompt: prompt
-        };
-        // Inject Image for Standard Image-to-Video
-        if (imageBase64) {
-            payload.image_url = imageBase64;
-        }
-    }
+      console.log(`[Video] 发起视频生成任务 -> ${url}`);
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify(payload),
+      });
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify(payload),
-    });
+      const text = await response.text();
+      if (!response.ok) throw new Error(`请求被拒绝 [${response.status}]: ${text.slice(0, 150)}`);
+      
+      let data;
+      try { data = JSON.parse(text); } catch { throw new Error(`返回数据异常: ${text.slice(0, 150)}`); }
 
-    if (!response.ok) {
-        const status = response.status;
-        let errorBody = "";
-        try {
-            const text = await response.text();
-            try {
-                // Try to pretty print JSON error
-                const json = JSON.parse(text);
-                errorBody = json.error?.message || JSON.stringify(json);
-            } catch {
-                // Fallback to raw text (could be HTML)
-                errorBody = text;
-            }
-        } catch {
-            errorBody = "No response body";
-        }
-        throw new Error(`Video Gen Failed [${status}]: ${errorBody.slice(0, 200)}`);
-    }
+      const directUrl = data.video_url || data.url || data.data?.[0]?.url;
+      if (directUrl) return directUrl;
 
-    // Safe JSON Parsing to catch HTML responses (Standard 404/500 pages hiding behind 200 OK)
-    const text = await response.text();
-    let data;
-    try {
-        data = JSON.parse(text);
-    } catch (e) {
-        throw new Error(`Invalid JSON response (likely HTML): ${text.slice(0, 200)}...`);
-    }
+      const taskId = data.id || data.task_id || data.data?.id;
+      if (!taskId) {
+          throw new Error("没拿到任务 ID，接口返回内容: " + JSON.stringify(data));
+      }
 
-    // Strict Validation: Check for URL in standard location
-    // Typically data.data[0].url
-    const videoUrl = data.data?.[0]?.url;
+      console.log(`[Video] 任务创建成功! ID: ${taskId}. 开始轮询...`);
+      
+      const base = customBaseUrl || settings.baseUrl;
+      const safeBase = base.replace(/\/$/, "");
+      let safePollPath = (customPollingPath && customPollingPath.trim().length > 0) ? customPollingPath.trim() : "/v1/video/query";
+      if (!safePollPath.startsWith("/")) safePollPath = "/" + safePollPath;
+      
+      const pollUrl = safePollPath.includes("?") 
+        ? `${safeBase}${safePollPath}&id=${taskId}` 
+        : `${safeBase}${safePollPath}?id=${taskId}`;
 
-    if (videoUrl && typeof videoUrl === 'string' && videoUrl.length > 0) {
-        return videoUrl;
-    }
-
-    // --- ASYNC POLLING LOGIC ---
-    // Strict Task ID Extraction
-    const taskId = data.id || (data.data && data.data.id) || data.task_id;
-    let currentStatus = data.status || data.task_status || data.data?.status;
-
-    if (taskId && (currentStatus === 'pending' || currentStatus === 'processing' || currentStatus === 'queued')) {
-        console.log(`Video Generation initiated (Async). Task ID: ${taskId}, Status: ${currentStatus}`);
-        
-        const maxAttempts = 60; // 10 minutes max (60 * 10s)
-        let attempts = 0;
-        
-        // Determine Polling Path Prefix (without ID)
-        let pollingPathPrefix = "";
-        if (customPollingPath && customPollingPath.trim().length > 0) {
-             pollingPathPrefix = customPollingPath.trim();
-        } else if (endpointPath.includes("/create")) {
-             pollingPathPrefix = endpointPath.replace("/create", "/status/");
-        } else if (endpointPath.endsWith("s")) {
-             pollingPathPrefix = endpointPath; // e.g. /v1/videos
-        } else {
-             pollingPathPrefix = "/v1/video/status/";
-        }
-
-        while ((currentStatus === 'pending' || currentStatus === 'processing' || currentStatus === 'queued') && attempts < maxAttempts) {
-            attempts++;
-            // Wait 10 seconds
-            await new Promise(resolve => setTimeout(resolve, 10000));
-
-            // Bulletproof URL Construction
-            const base = customBaseUrl || settings.baseUrl;
-            const safeBase = base.replace(/\/$/, ""); // Remove trailing slash
-            let safePath = pollingPathPrefix || "";
-            if (!safePath.startsWith("/")) safePath = "/" + safePath;
-            
-            let finalPollingUrl = "";
-            if (safePath.includes("?id=")) {
-                finalPollingUrl = `${safeBase}${safePath}${taskId}`;
-            } else if (safePath.includes("query")) {
-                finalPollingUrl = `${safeBase}${safePath}?id=${taskId}`;
-            } else {
-                // Standard RESTful appending
-                finalPollingUrl = `${safeBase}${safePath.endsWith("/") ? safePath : safePath + "/"}${taskId}`;
-            }
-
-            console.log(`Polling attempt ${attempts}/${maxAttempts}: ${finalPollingUrl}`);
-
-            try {
-                const pollResponse = await fetch(finalPollingUrl, {
-                    method: 'GET',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${apiKey}`,
-                    },
-                });
-
-                if (!pollResponse.ok) {
-                    const pollData = await pollResponse.json().catch(() => ({}));
-                    
-                    // CRITICAL: If 404 or invalid request, FAIL immediately to stop infinite loop
-                    if (pollResponse.status === 404) {
-                         throw new Error(`Polling Error: 404 Not Found at ${finalPollingUrl} - Please check your POLLING PATH.`);
-                    }
-                    
-                    if (pollResponse.status >= 400 && pollResponse.status < 500) {
-                         throw new Error(`Polling Error at ${finalPollingUrl}: ${JSON.stringify(pollData)}`);
-                    }
-                    
-                    console.warn(`Polling request failed: ${pollResponse.status}`);
-                    // For 500s, we might want to continue as they might be transient.
-                    if (pollResponse.status >= 500) continue;
-                }
-
-                const pollText = await pollResponse.text();
-                let pollData;
-                try {
-                    pollData = JSON.parse(pollText);
-                } catch {
-                    console.warn("Invalid JSON in poll response");
-                    continue;
-                }
-
-                if (pollData.error || pollData.status === "error") {
-                     throw new Error(`Polling Error at ${finalPollingUrl}: ${JSON.stringify(pollData)}`);
-                }
-
-                // Check for API-level errors in JSON (e.g. invalid_request_error)
-                if (pollData.error && pollData.error.type === 'invalid_request_error') {
-                     throw new Error(`Polling Error at ${finalPollingUrl}: ${JSON.stringify(pollData.error)}`);
-                }
-
-                // Update Status
-                // Check various common locations for status
-                currentStatus = pollData.status || pollData.task_status || pollData.data?.status || currentStatus;
-                
-                console.log(`Task Status: ${currentStatus}`);
-
-                // Check for success (including uppercase SUCCESS as requested)
-                if (currentStatus === 'SUCCESS' || currentStatus === 'success' || currentStatus === 'succeeded' || currentStatus === 'completed') {
-                    // Extract URL
-                    // Prioritize pollData.data?.video_url as requested
-                    const finalUrl = pollData.data?.video_url || pollData.video_url || pollData.url || pollData.data?.url || pollData.data?.[0]?.url;
-                    
-                    if (finalUrl) return finalUrl;
-                    throw new Error("Task completed but no video URL found in response: " + JSON.stringify(pollData));
-                }
-
-                if (currentStatus === 'failed' || currentStatus === 'fail') {
-                    throw new Error(`Video generation failed: ${pollData.fail_reason || pollData.error || 'Unknown error'}`);
-                }
-
-            } catch (pollError) {
-                console.error("Polling Error:", pollError);
-                throw pollError; 
-            }
-        }
-        
-        if (attempts >= maxAttempts) {
-            throw new Error("Video generation timed out after 10 minutes.");
-        }
-    } else if (!taskId) {
-         // If we are here, we got a 200 OK but couldn't find the URL and NO Task ID.
-         throw new Error("Could not extract Task ID from creation response: " + JSON.stringify(data));
-    }
-
-    // If we are here, we got a 200 OK but couldn't find the URL and it wasn't a recognized async task.
-    // Throw error with raw JSON to help debug what the provider actually returned.
-    throw new Error("API Response (No URL found): " + JSON.stringify(data));
-    
+      // 无脑轮询：最多查 120 次（每 5 秒一次，总计 10 分钟）
+      for (let i = 0; i < 120; i++) {
+          await new Promise(res => setTimeout(res, 5000));
+          
+          try {
+              const pollRes = await fetch(pollUrl, {
+                  method: 'GET',
+                  headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` }
+              });
+              
+              if (!pollRes.ok) continue; 
+              
+              const pollText = await pollRes.text();
+              let pollData;
+              try { pollData = JSON.parse(pollText); } catch { continue; }
+              
+              const status = (pollData.status || pollData.task_status || pollData.data?.status || "").toLowerCase();
+              console.log(`[Video] 轮询第 ${i+1} 次，当前状态: ${status}`);
+              
+              if (status === "success" || status === "completed" || status === "succeeded") {
+                  const finalUrl = pollData.video_url || pollData.url || pollData.data?.video_url || pollData.data?.[0]?.url;
+                  if (finalUrl) return finalUrl;
+                  throw new Error("老板说视频做好了，但没给播放链接: " + JSON.stringify(pollData));
+              }
+              
+              if (status === "failed" || status === "error") {
+                  throw new Error(`生成失败: ${pollData.error?.message || JSON.stringify(pollData)}`);
+              }
+              
+          } catch (e) {
+              console.warn("查询请求异常，将在5秒后重试...");
+          }
+      }
+      
+      throw new Error("视频生成超过 10 分钟，可能已经超时！");
+      
   } catch (error) {
-    console.error("Video Generation Error:", error);
-    throw error;
+      console.error("Video Generation Error:", error);
+      throw error;
   }
 };
